@@ -1,0 +1,127 @@
+//@version=5
+// QuantLab LRS-India — trend ladder for Indian indices, index ETFs & stocks.
+//
+// The 1x Indian adaptation of LRS-VT2 (no leveraged equity ETFs exist in
+// India): long when price is above EITHER its 200d or 50d SMA, out only when
+// below both, idle money in a liquid fund (~6.5% — the tester pays 0 on
+// cash, so the real result is UNDERSTATED by that yield on idle days).
+//
+// Validated on QuantLab's Nifty Midcap 150 backtest (123 stocks, up to 26y,
+// 10 bps costs, 1-day lag): ladder median CAGR 17.9% / MaxDD -55% / Sharpe
+// 0.49 vs buy & hold 19.7% / -74% / 0.47 — you give up some CAGR for a
+// drawdown roughly 20 points shallower; the ladder beats the plain 200d SMA
+// filter on every median metric. The optional volatility veto helped only
+// marginally at 1x, so it defaults OFF here.
+//
+// HOW TO USE
+//   1. Open a DAILY chart:
+//      - any NSE stock (RELIANCE, DIXON, ...) — signal runs on the stock
+//        itself (default), or
+//      - an index ETF (NIFTYBEES, MID150BEES, ...) — turn ON "signal on a
+//        separate index symbol" and pick the underlying index (NSE:NIFTY,
+//        or search "NIFTY MIDCAP 150") so the signal uses the index's
+//        longer, cleaner history.
+//   2. Set the two alerts; trade on the next open after an alert.
+//   3. When risk-off, park proceeds in a liquid/overnight fund.
+//
+// Backtests do not guarantee future returns. Survivorship bias applies to
+// today's index constituents. Not investment advice.
+
+strategy("QuantLab LRS-India (trend ladder, 1x)",
+     shorttitle = "LRS-India",
+     overlay = true,
+     initial_capital = 1000000,
+     commission_type = strategy.commission.percent,
+     commission_value = 0.15,
+     slippage = 0,
+     process_orders_on_close = true,
+     default_qty_type = strategy.percent_of_equity,
+     default_qty_value = 100)
+
+// ── Inputs ───────────────────────────────────────────────────────────────
+slowLen     = input.int(200,  "Slow regime SMA (days)", minval = 20)
+fastLen     = input.int(50,   "Fast re-entry SMA (days)", minval = 5)
+useLadder   = input.bool(true, "Two-speed ladder (off = classic 200d SMA only)")
+useIndexSig = input.bool(false, "Signal on a separate index symbol (for ETFs)")
+sigSym      = input.symbol("NSE:NIFTY", "Signal symbol (underlying index)")
+useVeto     = input.bool(false, "Volatility veto (marginal at 1x; validated OFF)")
+vetoK       = input.float(1.25, "Veto trigger (x long-run vol)", minval = 1.0)
+volLen      = input.int(20,   "Realized vol lookback (days)", minval = 5)
+lrVolLen    = input.int(1260, "Long-run vol lookback (days, ~5y)", minval = 252)
+rebBandPct  = input.float(10.0, "Rebalance band (weight change, % points)", minval = 1.0)
+startTime   = input.time(timestamp("1 Jan 2005"), "Backtest start")
+
+// ── Signal series ────────────────────────────────────────────────────────
+srcClose = useIndexSig ?
+     request.security(sigSym, timeframe.period, close,
+         lookahead = barmerge.lookahead_off) : close
+
+smaSlow = ta.sma(srcClose, slowLen)
+smaFast = ta.sma(srcClose, fastLen)
+riskOn  = useLadder ? (srcClose > smaSlow or srcClose > smaFast) :
+     srcClose > smaSlow
+
+idxRet  = srcClose / srcClose[1] - 1.0
+vol20   = ta.stdev(idxRet, volLen)   * math.sqrt(252)
+volLR   = ta.stdev(idxRet, lrVolLen) * math.sqrt(252)
+vtRaw   = useVeto and not na(volLR) and vol20 > vetoK * volLR ?
+     math.min(1.0, volLR / vol20) : 1.0
+targetW = riskOn ? vtRaw : 0.0
+targetW := na(targetW) ? 0.0 : targetW
+
+// ── Execution: trade on regime flips or weight drift ≥ band ──────────────
+var float heldW = 0.0
+inWindow = time >= startTime and not na(smaSlow)
+
+if inWindow
+    if targetW == 0.0 and strategy.position_size > 0
+        strategy.close_all(comment = "risk-off → liquid fund")
+        heldW := 0.0
+    else if targetW > 0.0
+        bool firstEntry = strategy.position_size == 0
+        bool drifted    = math.abs(targetW - heldW) * 100.0 >= rebBandPct
+        if firstEntry or drifted
+            float wantQty = strategy.equity * targetW / close
+            float diff    = wantQty - strategy.position_size
+            if diff > 0
+                strategy.order("Buy",  strategy.long,  qty = diff,
+                     comment = "w=" + str.tostring(targetW, "#.##"))
+            else if diff < 0
+                strategy.order("Trim", strategy.short,
+                     qty = math.min(-diff, strategy.position_size),
+                     comment = "w=" + str.tostring(targetW, "#.##"))
+            heldW := targetW
+
+// ── Chart dressing ───────────────────────────────────────────────────────
+bgcolor(riskOn ? color.new(color.green, 94) : color.new(color.red, 94))
+plot(useIndexSig ? na : smaSlow, "Slow SMA", color.new(color.orange, 0), 2)
+plot(useIndexSig or not useLadder ? na : smaFast, "Fast SMA",
+     color.new(color.blue, 30), 1)
+
+// Buy/sell markers on regime flips
+plotshape(riskOn and not riskOn[1], "BUY signal", shape.triangleup,
+     location.belowbar, color.new(color.green, 0), size = size.small,
+     text = "BUY", textcolor = color.new(color.green, 0))
+plotshape(not riskOn and riskOn[1], "SELL signal", shape.triangledown,
+     location.abovebar, color.new(color.red, 0), size = size.small,
+     text = "SELL", textcolor = color.new(color.red, 0))
+
+var table info = table.new(position.top_right, 2, 4, border_width = 1)
+if barstate.islast
+    table.cell(info, 0, 0, "Regime",        text_size = size.small)
+    table.cell(info, 1, 0, riskOn ? "RISK-ON" : "RISK-OFF",
+         text_color = riskOn ? color.green : color.red, text_size = size.small)
+    table.cell(info, 0, 1, "Target weight", text_size = size.small)
+    table.cell(info, 1, 1, str.tostring(targetW * 100, "#.#") + "%", text_size = size.small)
+    table.cell(info, 0, 2, "Rule",          text_size = size.small)
+    table.cell(info, 1, 2, useLadder ? "out below 50d AND 200d" : "out below 200d",
+         text_size = size.small)
+    table.cell(info, 0, 3, "Hold now",      text_size = size.small)
+    table.cell(info, 1, 3, riskOn ? syminfo.ticker : "liquid fund (~6.5%)",
+         text_size = size.small)
+
+// ── Alerts ───────────────────────────────────────────────────────────────
+alertcondition(riskOn and not riskOn[1],  "LRS-India: RISK-ON",
+     "Price crossed above a regime SMA — buy on next open")
+alertcondition(not riskOn and riskOn[1],  "LRS-India: RISK-OFF",
+     "Price below regime SMA(s) — sell on next open, park in liquid fund")

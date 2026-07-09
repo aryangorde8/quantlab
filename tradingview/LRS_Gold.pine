@@ -1,0 +1,82 @@
+//@version=5
+// QuantLab LRS-Gold — the 30% gold-trend sleeve of LRS-Fortress.
+//
+// Rule (Faber 2007 trend following, as backtested in quantlab/gold.py):
+// hold 2x gold (UGL) while GOLD is above its 200-day SMA; below it, hold
+// T-bills (SGOV). ~2 signal changes per year. In the 55-year backtest this
+// sleeve is what carried the portfolio through 2000-03 and the 1970s.
+//
+// HOW TO USE
+//   1. Open a DAILY chart of the fund you trade: AMEX:UGL (2x, the
+//      Fortress default) or GLD (1x, gentler).
+//   2. Paste this into the Pine Editor, Add to chart.
+//   3. The signal is computed on spot gold (TVC:GOLD) — the fund's own
+//      price is 2x-distorted and must not drive the SMA.
+//   4. Set both alerts (Once Per Bar Close). On RISK-OFF sell UGL and buy
+//      SGOV; on RISK-ON reverse. Trade the next open, then stop looking.
+//
+// NOTE: the tester pays nothing on idle cash, so it UNDERSTATES the real
+// result by SGOV's yield (~4-5%/yr) on the ~30-40% of days out of gold.
+// This sleeve is 30% of the Fortress portfolio — size it there, not here.
+// Backtests do not guarantee future returns. Not investment advice.
+
+strategy("QuantLab LRS-Gold (gold 200d trend sleeve)",
+     shorttitle = "LRS-Gold",
+     overlay = true,
+     initial_capital = 10000,
+     commission_type = strategy.commission.percent,
+     commission_value = 0.10,
+     slippage = 0,
+     process_orders_on_close = true,
+     default_qty_type = strategy.percent_of_equity,
+     default_qty_value = 100)
+
+// ── Inputs ───────────────────────────────────────────────────────────────
+smaLen      = input.int(200, "Trend SMA length (days)", minval = 20)
+useIndexSig = input.bool(true, "Compute signal on spot gold (recommended)")
+sigSym      = input.symbol("TVC:GOLD", "Signal symbol (spot gold)")
+startTime   = input.time(timestamp("1 Jan 2010"), "Backtest start")
+
+// ── Signal (on spot gold, never on the leveraged fund) ──────────────────
+srcClose = useIndexSig ?
+     request.security(sigSym, timeframe.period, close,
+         lookahead = barmerge.lookahead_off) : close
+
+smaVal = ta.sma(srcClose, smaLen)
+riskOn = srcClose > smaVal
+
+// ── Execution ────────────────────────────────────────────────────────────
+inWindow = time >= startTime and not na(smaVal)
+if inWindow
+    if riskOn and strategy.position_size == 0
+        strategy.entry("Gold", strategy.long)
+    else if not riskOn and strategy.position_size > 0
+        strategy.close_all(comment = "risk-off → SGOV")
+
+// ── Chart dressing ───────────────────────────────────────────────────────
+bgcolor(riskOn ? color.new(color.yellow, 92) : color.new(color.red, 94))
+plot(useIndexSig ? na : smaVal, "SMA (chart symbol)", color.new(color.orange, 0), 2)
+
+plotshape(riskOn and not riskOn[1], "BUY signal", shape.triangleup,
+     location.belowbar, color.new(color.green, 0), size = size.small,
+     text = "BUY", textcolor = color.new(color.green, 0))
+plotshape(not riskOn and riskOn[1], "SELL signal", shape.triangledown,
+     location.abovebar, color.new(color.red, 0), size = size.small,
+     text = "SELL", textcolor = color.new(color.red, 0))
+
+var table info = table.new(position.top_right, 2, 3, border_width = 1)
+if barstate.islast
+    table.cell(info, 0, 0, "Gold regime", text_size = size.small)
+    table.cell(info, 1, 0, riskOn ? "RISK-ON" : "RISK-OFF",
+         text_color = riskOn ? color.green : color.red, text_size = size.small)
+    table.cell(info, 0, 1, "Hold now", text_size = size.small)
+    table.cell(info, 1, 1, riskOn ? syminfo.ticker : "SGOV (T-bills)",
+         text_size = size.small)
+    table.cell(info, 0, 2, "Sleeve size", text_size = size.small)
+    table.cell(info, 1, 2, "30% of Fortress", text_size = size.small)
+
+// ── Alerts ───────────────────────────────────────────────────────────────
+alertcondition(riskOn and not riskOn[1], "LRS-Gold: RISK-ON",
+     "Gold crossed ABOVE its 200d SMA — sell SGOV, buy UGL at next open")
+alertcondition(not riskOn and riskOn[1], "LRS-Gold: RISK-OFF",
+     "Gold crossed BELOW its 200d SMA — sell UGL, buy SGOV at next open")

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+# regenerable price caches (yfinance re-downloads them; source data below is kept)
+data_cache/*
+!data_cache/gold_monthly.csv
+!data_cache/ind_nifty500list.csv
+!data_cache/ind_niftymidcap150list.csv

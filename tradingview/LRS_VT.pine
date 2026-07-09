@@ -1,0 +1,147 @@
+//@version=5
+// QuantLab LRS-VT2 — "Leverage for the Long Run" (Gayed & Bilello 2016)
+// + two-speed trend ladder + conditional volatility veto (cf. Moreira &
+// Muir 2017; Cederburg et al. 2020) + defensive-asset rotation.
+//
+// v2 changes vs v1: risk-off only when the index is below BOTH its 200d and
+// 50d SMA (the 50d line restores exposure quickly after V-bottoms); the vol
+// scale only kicks in when 20d vol exceeds 1.25x long-run vol; default
+// signal symbol is NASDAQ:NDX to match TQQQ.
+//
+// HOW TO USE
+//   1. Open a DAILY chart of the fund you would actually trade
+//      (e.g. NASDAQ:TQQQ; or NSE:NIFTYBEES for the 1x India version).
+//   2. Paste this into the Pine Editor and Add to chart.
+//   3. Signal symbol = the UNDERLYING INDEX (default NASDAQ:NDX), because
+//      the regime/vol math belongs to the index, not the leveraged fund.
+//   4. When risk-off, this strategy goes flat. With real money you park the
+//      proceeds in the defensive leg: IEF if IEF's trailing 12m total return
+//      beats T-bills, else SGOV (liquid fund in India) — a single-symbol
+//      Pine strategy cannot hold that second asset for you. NOTE: the
+//      strategy tester pays nothing on idle cash, so it UNDERSTATES the
+//      real-world result by the defensive leg's yield.
+//
+// EXECUTION MODEL (v2.1): fills at the signal-bar close
+// (process_orders_on_close), matching the engine's execution. Costs are a
+// flat 0.10% commission per trade — price-proportional, unlike tick-based
+// slippage which grossly overcharges the split-adjusted early years (TQQQ's
+// 2010 adjusted price was ~$0.40, so 2 ticks of slippage was 1-5% PER FILL
+// and buries the early backtest). Backtests do not guarantee future
+// returns. Not investment advice.
+
+strategy("QuantLab LRS-VT2 (trend ladder + vol veto)",
+     shorttitle = "LRS-VT2",
+     overlay = true,
+     initial_capital = 10000,
+     commission_type = strategy.commission.percent,
+     commission_value = 0.10,
+     slippage = 0,
+     process_orders_on_close = true,
+     default_qty_type = strategy.percent_of_equity,
+     default_qty_value = 100)
+
+// ── Inputs ───────────────────────────────────────────────────────────────
+slowLen     = input.int(200,  "Slow regime SMA (days)", minval = 20)
+fastLen     = input.int(50,   "Fast re-entry SMA (days)", minval = 5)
+useIndexSig = input.bool(true, "Compute signal on a separate index symbol")
+sigSym      = input.symbol("NASDAQ:NDX", "Signal symbol (underlying index)")
+useVT       = input.bool(true, "Volatility veto (conditional vol scaling)")
+vetoK       = input.float(1.25, "Veto trigger (x long-run vol)", minval = 1.0)
+warnW       = input.float(1.0, "Warning-zone weight (below fast SMA, above slow; Defense: 0.5)",
+     minval = 0.0, maxval = 1.0, step = 0.1)
+extCap      = input.float(0.0, "Overextension cap (0 = off; Defense: 0.25)",
+     minval = 0.0, maxval = 1.0, step = 0.05)
+volLen      = input.int(20,   "Realized vol lookback (days)", minval = 5)
+lrVolLen    = input.int(1260, "Long-run vol lookback (days, ~5y)", minval = 252)
+rebBandPct  = input.float(10.0, "Rebalance band (weight change, % points)", minval = 1.0)
+startTime   = input.time(timestamp("1 Jan 1990"), "Backtest start")
+
+// ── Signal series (computed on the index, never the leveraged fund) ─────
+srcClose = useIndexSig ?
+     request.security(sigSym, timeframe.period, close,
+         lookahead = barmerge.lookahead_off) : close
+
+smaVal  = ta.sma(srcClose, slowLen)
+smaFast = ta.sma(srcClose, fastLen)
+// Two-speed ladder: risk-off only when below BOTH moving averages.
+riskOn  = srcClose > smaVal or srcClose > smaFast
+
+idxRet  = srcClose / srcClose[1] - 1.0
+vol20   = ta.stdev(idxRet, volLen)   * math.sqrt(252)
+volLR   = ta.stdev(idxRet, lrVolLen) * math.sqrt(252)
+
+// Conditional veto: trim only when recent vol exceeds vetoK x long-run vol.
+vtRaw   = useVT and not na(volLR) and vol20 > vetoK * volLR ?
+     math.min(1.0, volLR / vol20) : 1.0
+
+// Base weight: full above both SMAs; warning weight above slow but below
+// fast (the 1987/2020 breakdown zone); full on the fast recovery rung.
+baseW = srcClose > smaVal ? (srcClose > smaFast ? 1.0 : warnW) :
+     srcClose > smaFast ? 1.0 : 0.0
+
+// Overextension trim: cap unprotected crash room after parabolic runs.
+extension = srcClose / smaVal - 1.0
+extW = extCap > 0 and extension > extCap ? extCap / extension : 1.0
+
+targetW = baseW * vtRaw * extW
+targetW := na(targetW) ? 0.0 : targetW
+
+// ── Execution: trade only on regime flips or weight drift ≥ band ────────
+var float heldW = 0.0
+inWindow = time >= startTime and not na(smaVal)
+
+if inWindow
+    if targetW == 0.0 and strategy.position_size > 0
+        strategy.close_all(comment = "risk-off → T-bills/Treasuries")
+        heldW := 0.0
+    else if targetW > 0.0
+        bool firstEntry = strategy.position_size == 0
+        bool drifted    = math.abs(targetW - heldW) * 100.0 >= rebBandPct
+        if firstEntry or drifted
+            float wantQty = strategy.equity * targetW / close
+            float diff    = wantQty - strategy.position_size
+            if diff > 0
+                strategy.order("Buy",  strategy.long,  qty = diff,
+                     comment = "w=" + str.tostring(targetW, "#.##"))
+            else if diff < 0
+                strategy.order("Trim", strategy.short,
+                     qty = math.min(-diff, strategy.position_size),
+                     comment = "w=" + str.tostring(targetW, "#.##"))
+            heldW := targetW
+
+// ── Chart dressing ───────────────────────────────────────────────────────
+bgcolor(riskOn ? color.new(color.green, 94) : color.new(color.red, 94))
+plot(useIndexSig ? na : smaVal, "SMA (chart symbol)", color.new(color.orange, 0), 2)
+
+// Buy/sell markers on regime flips
+plotshape(riskOn and not riskOn[1], "BUY signal", shape.triangleup,
+     location.belowbar, color.new(color.green, 0), size = size.small,
+     text = "BUY", textcolor = color.new(color.green, 0))
+plotshape(not riskOn and riskOn[1], "SELL signal", shape.triangledown,
+     location.abovebar, color.new(color.red, 0), size = size.small,
+     text = "SELL", textcolor = color.new(color.red, 0))
+
+var table info = table.new(position.top_right, 2, 6, border_width = 1)
+if barstate.islast
+    table.cell(info, 0, 0, "Regime",        text_size = size.small)
+    table.cell(info, 1, 0, riskOn ? "RISK-ON" : "RISK-OFF",
+         text_color = riskOn ? color.green : color.red, text_size = size.small)
+    table.cell(info, 0, 1, "Target weight", text_size = size.small)
+    table.cell(info, 1, 1, str.tostring(targetW * 100, "#.#") + "%", text_size = size.small)
+    table.cell(info, 0, 2, "20d index vol", text_size = size.small)
+    table.cell(info, 1, 2, str.tostring(vol20 * 100, "#.#") + "%", text_size = size.small)
+    table.cell(info, 0, 3, "Long-run vol",  text_size = size.small)
+    table.cell(info, 1, 3, str.tostring(volLR * 100, "#.#") + "%", text_size = size.small)
+    table.cell(info, 0, 4, "Hold now",      text_size = size.small)
+    table.cell(info, 1, 4, riskOn ? syminfo.ticker + " @ " + str.tostring(targetW * 100, "#.#") + "%"
+         : "T-bills (SGOV/IEF)", text_size = size.small)
+    table.cell(info, 0, 5, "Idle cash",     text_size = size.small)
+    table.cell(info, 1, 5, str.tostring((1 - targetW) * 100, "#.#") + "%", text_size = size.small)
+
+// ── Alerts: set these once, then the chart watches the market for you ───
+alertcondition(riskOn and not riskOn[1],  "LRS-VT2: RISK-ON",
+     "Index crossed ABOVE a regime SMA (50d or 200d) — enter per target weight")
+alertcondition(not riskOn and riskOn[1],  "LRS-VT2: RISK-OFF",
+     "Index below BOTH 50d and 200d SMA — exit to defensive leg (IEF/SGOV)")
+alertcondition(math.abs(targetW - targetW[1]) >= 0.10, "LRS-VT2: rebalance",
+     "Volatility-veto weight moved ≥10 percentage points")
