@@ -123,9 +123,9 @@ curl -s -A "Mozilla/5.0" "https://archives.nseindia.com/content/indices/ind_nift
 **US (the 70% sleeve):**
 1. Open a **daily** chart of `NASDAQ:TQQQ`.
 2. Pine Editor → paste `tradingview/LRS_VT.pine` → Add to chart.
-3. Settings → set **Warning-zone weight = 0.5** and **Overextension cap =
-   0.25** (that makes it LRS-Defense; defaults are plain v2), rebalance
-   band 15 if trading on Dhan.
+3. Defaults are already the **LRS-Defense** config (warning weight 0.5,
+   extension cap 0.25). Only change: rebalance band → 15 if trading on
+   Dhan. (For plain v2: warnW = 1.0, extCap = 0.)
 4. Create alerts on "LRS-VT2: RISK-ON", "RISK-OFF", "rebalance" →
    Once Per Bar Close.
 

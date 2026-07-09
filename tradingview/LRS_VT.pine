@@ -8,6 +8,11 @@
 // scale only kicks in when 20d vol exceeds 1.25x long-run vol; default
 // signal symbol is NASDAQ:NDX to match TQQQ.
 //
+// DEFAULTS = LRS-DEFENSE (the recommended config: warning-zone weight 0.5,
+// overextension cap 0.25 — on TQQQ's asset this cut max drawdown from -77%
+// to -68% and worst year from -55% to -45% at ~1pp CAGR). Set warnW=1.0
+// and extCap=0 to get plain v2.
+//
 // HOW TO USE
 //   1. Open a DAILY chart of the fund you would actually trade
 //      (e.g. NASDAQ:TQQQ; or NSE:NIFTYBEES for the 1x India version).
@@ -47,9 +52,9 @@ useIndexSig = input.bool(true, "Compute signal on a separate index symbol")
 sigSym      = input.symbol("NASDAQ:NDX", "Signal symbol (underlying index)")
 useVT       = input.bool(true, "Volatility veto (conditional vol scaling)")
 vetoK       = input.float(1.25, "Veto trigger (x long-run vol)", minval = 1.0)
-warnW       = input.float(1.0, "Warning-zone weight (below fast SMA, above slow; Defense: 0.5)",
+warnW       = input.float(0.5, "Warning-zone weight (Defense default 0.5; 1.0 = plain v2)",
      minval = 0.0, maxval = 1.0, step = 0.1)
-extCap      = input.float(0.0, "Overextension cap (0 = off; Defense: 0.25)",
+extCap      = input.float(0.25, "Overextension cap (Defense default 0.25; 0 = off / plain v2)",
      minval = 0.0, maxval = 1.0, step = 0.05)
 volLen      = input.int(20,   "Realized vol lookback (days)", minval = 5)
 lrVolLen    = input.int(1260, "Long-run vol lookback (days, ~5y)", minval = 252)
