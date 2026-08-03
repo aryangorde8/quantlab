@@ -87,10 +87,11 @@ you read the chart panel and obey.**
 
 ## 3. Execution route (from India)
 
-1. **Dhan GIFT City** (confirmed carrying TQQQ): fund via LRS (A2 form,
-   $250k/person/year — family members multiply it; TCS above ~₹10L is
-   prepaid tax, not a cost). Verify UGL/SGOV/IEF are searchable; if UGL
-   isn't, IBKR carries everything.
+1. **Dhan GIFT City** (confirmed carrying TQQQ): fund via the RBI's
+   Liberalised Remittance Scheme (A2 form; LRS caps remittances per person
+   per financial year, and TCS above the statutory threshold is prepaid tax,
+   not a cost). Verify UGL/SGOV/IEF are searchable; if UGL isn't, IBKR
+   carries everything.
 2. Costs: Dhan 0.25%/trade ≈ 1.2 CAGR points at our trade frequency (use
    the 15-point rebalance band in the Pine). IBKR ≈ free — switch when the
    account is large enough to care.
@@ -103,9 +104,10 @@ you read the chart panel and obey.**
 
 ## 4. Expectations — write these down before starting
 
-- **Planning CAGR: ~19-20% post-tax** (28% research − costs − taxes). The
-  ₹100cr-in-30-years plan works at this rate WITH growing contributions
-  (see portfolio_projection.png; early money is worth ~100x late money).
+- **Planning CAGR: ~19-20% post-tax** (28% research − costs − taxes). Any
+  long-horizon plan at this rate depends on *growing* contributions, not on
+  the return alone — early contributions dominate the terminal outcome
+  (year-1 money compounds on the order of 100x more than year-30 money).
 - **A -35% to -50% drawdown WILL happen** — likely several times over 30
   years. It is not the strategy breaking; it's the strategy working as
   measured. 2008 took -49.3% and recovered in 10 months.
@@ -119,8 +121,8 @@ you read the chart panel and obey.**
    extra — year-1 money compounds ~185x by year 30).
 3. Check the market only when an alert fires, plus one monthly 10-minute
    routine (rotation check, weights, alerts armed).
-4. Keep an emergency fund and index-fund core OUTSIDE this system so no
-   life event can force a sale at a bottom.
+4. Keep an emergency reserve and a plain index-fund core OUTSIDE this system
+   so no life event can force a sale at a bottom.
 5. Re-read section 4 during every drawdown.
 
 ---

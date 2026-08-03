@@ -65,19 +65,7 @@ top 10). The AI part takes a few minutes on CPU.
 
 ---
 
-## 3. Your wealth projection chart
-
-```bash
-python3 make_projection.py
-```
-Regenerates `portfolio_projection.png` — the 40-year compounding chart for
-$500/1000/1500/2000-per-month contributions, with milestone years (₹1cr →
-₹100cr) and 5-year snapshots. Edit the assumptions at the top of the file
-(START_USD, CAGR, GROWTH, monthly levels) and rerun to explore scenarios.
-
----
-
-## 4. Best & worst years
+## 3. Best & worst years
 
 ```bash
 python3 best_worst_years.py
@@ -88,7 +76,9 @@ hold beside each and the `edge %` column showing who won that year. Read the
 edge column in the worst-years table to see what the crash protection is
 worth — and in the best-years table to see what it costs.
 
-## 5. Refreshing market data
+---
+
+## 4. Refreshing market data
 
 Prices are cached forever in `data_cache/`. To pull fresh data, delete the
 price caches (NOT the source files) and rerun:
@@ -118,7 +108,7 @@ curl -s -A "Mozilla/5.0" "https://archives.nseindia.com/content/indices/ind_nift
 
 ---
 
-## 6. TradingView setup (not a command — a checklist)
+## 5. TradingView setup (not a command — a checklist)
 
 **US (the 70% sleeve):**
 1. Open a **daily** chart of `NASDAQ:TQQQ`.
@@ -143,7 +133,7 @@ stop looking.
 
 ---
 
-## 7. Project map
+## 6. Project map
 
 ```
 PLAYBOOK.md            what/when/how to invest (read this first)
@@ -151,7 +141,7 @@ README.md              the research evidence and every disclosed assumption
 COMMANDS.md            this file
 run_research.py        US engine        -> results_*.csv, chart_flagship.png
 run_nifty500.py        India engine     -> results_<universe>.csv, report
-make_projection.py     wealth chart     -> portfolio_projection.png
+best_worst_years.py    best/worst calendar years per market
 quantlab/              the engine library (data, leverage, bonds, gold,
                        strategies, backtest, metrics, report, india, ollama)
 tradingview/           LRS_VT.pine (US), LRS_India.pine (NSE)
