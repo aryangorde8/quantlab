@@ -194,6 +194,16 @@ vol target, fills orders next bar (same 1-day lag as the backtest), and ships
 alerts for risk-on / risk-off / rebalance. When risk-off it goes flat — park
 real proceeds in T-bills/Treasuries yourself (SGOV/IEF).
 
+`tradingview/LRS_Sentinel.pine` is the live panel for the drawdown-budgeted
+book. Unlike the others it is an **indicator, not a `strategy()`** — Sentinel
+holds three risky sleeves at once (TQQQ + IEF + gold) at shifting weights, and
+a Pine strategy can only hold one symbol, so any strategy-tester number would
+describe a different portfolio. Run it on a **daily** chart (NASDAQ:TQQQ is the
+natural host, but every symbol is an explicit input, so the host is only a
+canvas) and it prints a target weight for each sleeve plus cash, which limit is
+currently binding, and the model book's drawdown against your budget. The
+backtest stays `run_lowdd.py`.
+
 `tradingview/LRS_India.pine` is the 1x Indian adaptation (no leveraged equity
 ETFs exist in India) for NSE stocks, index ETFs and indices: two-speed trend
 ladder validated on the Nifty Midcap 150 backtest (ladder median Sharpe 0.49

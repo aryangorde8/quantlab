@@ -160,6 +160,17 @@ curl -s -A "Mozilla/5.0" "https://archives.nseindia.com/content/indices/ind_nift
 spot gold (TVC:GOLD) automatically; the panel says whether to hold UGL or
 SGOV right now.
 
+**Low-drawdown book (LRS-Sentinel):** daily `NASDAQ:TQQQ` chart → paste
+`tradingview/LRS_Sentinel.pine` → Add to chart. This one is an indicator, not
+a strategy — it cannot trade for you, because the book holds three sleeves at
+once. The table gives you a target % for equity / bonds / gold / cash; trade
+to those at the next open when the "rebalance" alert fires. Set the
+"rebalance" and "de-risk" alerts. Two dials worth changing: the drawdown
+budget (default 10%) and the vol target (default 6%). The "binding" row tells
+you which of the three limits is holding exposure down right now. Note the
+model drawdown it shows is the *model's*, rebuilt from chart history — not
+your account's.
+
 **India:** daily chart of the NSE stock or ETF → paste
 `tradingview/LRS_India.pine`. For ETFs enable "signal on a separate index
 symbol" and pick the underlying index. Set both alerts.

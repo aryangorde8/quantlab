@@ -1,0 +1,306 @@
+//@version=5
+// QuantLab LRS-SENTINEL — drawdown-budgeted book (design target: MaxDD < 10%)
+//
+// The inverse of LRS_VT.pine. That script maximises growth and accepts a
+// -50%+ drawdown. This one caps drawdown at a budget you set and takes the
+// most return that fits inside it.
+//
+// WHY THIS IS AN INDICATOR, NOT A strategy()
+//   Sentinel holds THREE risky sleeves at once (leveraged equity, Treasuries,
+//   gold) plus cash, at weights that move daily. A Pine strategy can hold one
+//   symbol, so it physically cannot trade or backtest this book — any
+//   strategy-tester number would be a different portfolio than the one
+//   described. This script is therefore a LIVE SIGNAL PANEL: it computes the
+//   whole book and prints the target weight for each sleeve. The backtest
+//   lives in run_lowdd.py, where all three sleeves are simulated properly.
+//
+// HOW TO USE
+//   1. Open a DAILY chart. NASDAQ:TQQQ is the natural host, but the host
+//      symbol is only a canvas — every input below is an explicit symbol, so
+//      any liquid daily chart gives identical output.
+//   2. Paste into the Pine Editor -> Add to chart.
+//   3. Read the table. It gives you a target % for TQQQ, IEF, gold and cash.
+//      Trade to those weights at the next open when an alert fires.
+//   4. Set the two alerts ("rebalance" and "de-risk").
+//
+// THE FOUR MECHANISMS (see quantlab/sentinel.py for the full rationale)
+//   1. Risk parity over three trend sleeves, each parking in T-bills when its
+//      own trend is off (Faber 2007; Asness, Frazzini & Pedersen 2012).
+//   2. Portfolio volatility target (Moreira & Muir 2017).
+//   3. CPPI drawdown governor vs a ROLLING high-water mark, so an old peak
+//      ages out and the book does not cash-lock through a recovery
+//      (Black & Perold 1992; Grossman & Zhou 1993).
+//   4. An overnight-gap stress cap. The governor reacts to realised drawdown
+//      and structurally cannot price a gap: a 3x fund fell ~61% on
+//      1987-10-19 alone, which spends a 10% budget at a 16% fund weight.
+//      Without this cap the budget is unenforceable at leverage.
+//
+// TWO HONEST LIMITS — read before trusting the panel
+//   * The drawdown the governor reacts to is the MODEL book's, rebuilt from
+//     chart history each load — not your actual account's. If you start
+//     mid-drawdown your real state differs.
+//   * History is bounded by the youngest input symbol (TQQQ starts 2010,
+//     GLD 2004, IEF 2002), so the model curve is short. run_lowdd.py uses
+//     index/futures data back to 1971.
+//
+// Backtests do not guarantee future returns. Not investment advice.
+
+indicator("QuantLab LRS-Sentinel (drawdown-budgeted book)",
+     shorttitle = "LRS-Sentinel", overlay = true)
+
+// ── Symbols ──────────────────────────────────────────────────────────────
+sigSym   = input.symbol("NASDAQ:NDX",  "Equity signal (underlying index)",  group = "Symbols")
+eqSym    = input.symbol("NASDAQ:TQQQ", "Equity sleeve (the 3x fund)",       group = "Symbols")
+bondSym  = input.symbol("NASDAQ:IEF",  "Bond sleeve (7-10y Treasuries)",    group = "Symbols")
+goldSym  = input.symbol("AMEX:GLD",    "Gold sleeve (spot proxy)",          group = "Symbols")
+
+// ── Risk budget (the two dials that matter) ──────────────────────────────
+targetVol = input.float(6.0,  "Portfolio volatility target (% annual)", minval = 1.0,
+     step = 0.5, group = "Risk budget")
+ddBudget  = input.float(10.0, "Max drawdown budget (%)",                minval = 2.0,
+     step = 1.0, group = "Risk budget")
+cppiMult  = input.float(3.0,  "CPPI multiplier (governor aggression)",  minval = 1.0,
+     step = 0.5, group = "Risk budget")
+minMult   = input.float(0.15, "Minimum exposure (anti cash-lock)",      minval = 0.0,
+     maxval = 1.0, step = 0.05, group = "Risk budget")
+hwmLen    = input.int(252,    "Rolling high-water mark (days)",         minval = 60,
+     group = "Risk budget")
+cashYield = input.float(4.3,  "Cash / T-bill yield (% annual)",         minval = 0.0,
+     step = 0.1, group = "Risk budget")
+
+// ── Sizing detail ────────────────────────────────────────────────────────
+volLen    = input.int(60,  "Vol lookback for sizing (days)", minval = 20, group = "Sizing")
+wCap      = input.float(60.0, "Max weight per sleeve (%)",   minval = 34.0, maxval = 100.0,
+     group = "Sizing")
+band      = input.float(10.0, "Rebalance band (total weight change, % points)",
+     minval = 1.0, group = "Sizing")
+
+// Worst-case ONE-DAY loss assumed per sleeve, for the stress cap. Equity is
+// the 1987-10-19 print (index -20.5%) passed through 3x leverage.
+gapEq     = input.float(61.0, "Stress gap: equity sleeve (%)", minval = 5.0, group = "Stress cap")
+gapBond   = input.float(5.0,  "Stress gap: bond sleeve (%)",   minval = 1.0, group = "Stress cap")
+gapGold   = input.float(12.0, "Stress gap: gold sleeve (%)",   minval = 1.0, group = "Stress cap")
+
+// ── Equity-sleeve trend rules (LRS-Defense, matching LRS_VT.pine) ────────
+slowLen = input.int(200,  "Slow regime SMA",   minval = 20, group = "Equity signal")
+fastLen = input.int(50,   "Fast re-entry SMA", minval = 5,  group = "Equity signal")
+warnW   = input.float(0.5,  "Warning-zone weight",  minval = 0.0, maxval = 1.0,
+     step = 0.1, group = "Equity signal")
+extCap  = input.float(0.25, "Overextension cap",    minval = 0.0, maxval = 1.0,
+     step = 0.05, group = "Equity signal")
+vetoK   = input.float(1.25, "Vol veto trigger (x long-run vol)", minval = 1.0,
+     group = "Equity signal")
+
+// ── Data ─────────────────────────────────────────────────────────────────
+f_close(sym) => request.security(sym, timeframe.period, close,
+     lookahead = barmerge.lookahead_off)
+
+idxC  = f_close(sigSym)
+eqC   = f_close(eqSym)
+bondC = f_close(bondSym)
+goldC = f_close(goldSym)
+
+rfD   = cashYield / 100.0 / 252.0          // daily cash return
+tvT   = targetVol / 100.0
+ddB   = ddBudget  / 100.0
+
+f_ret(s) => na(s) or na(s[1]) or s[1] == 0 ? 0.0 : s / s[1] - 1.0
+eqRet   = f_ret(eqC)
+bondRet = f_ret(bondC)
+goldRet = f_ret(goldC)
+
+// ── Sleeve 1: equity, on the LRS-Defense ladder ─────────────────────────
+smaSlow = ta.sma(idxC, slowLen)
+smaFast = ta.sma(idxC, fastLen)
+idxRet  = f_ret(idxC)
+vol20   = ta.stdev(idxRet, 20)   * math.sqrt(252)
+volLR   = ta.stdev(idxRet, 1260) * math.sqrt(252)
+
+vtW  = not na(volLR) and volLR > 0 and vol20 > vetoK * volLR ?
+     math.min(1.0, volLR / vol20) : 1.0
+baseW = idxC > smaSlow ? (idxC > smaFast ? 1.0 : warnW) : idxC > smaFast ? 1.0 : 0.0
+ext   = na(smaSlow) or smaSlow == 0 ? 0.0 : idxC / smaSlow - 1.0
+extW  = extCap > 0 and ext > extCap ? extCap / ext : 1.0
+defW  = na(baseW) ? 0.0 : baseW * vtW * extW
+
+// Each sleeve parks in cash when its own trend is off — that is what makes
+// the risk-parity weights meaningful.
+//
+// Signals are applied with a ONE-DAY LAG (matching strategies.py, which
+// shifts every signal by one bar): the weight you act on today was decided
+// at yesterday's close. Using today's signal against today's return would be
+// look-ahead, and since the model curve below drives the drawdown governor,
+// that would mis-size live exposure. `defW`/`bondOn`/`goldOn` unlagged are
+// still what the panel displays — those are the actionable ones.
+ldefW = nz(defW[1])
+sleeveEq = ldefW * eqRet + (1.0 - ldefW) * rfD
+
+// ── Sleeve 2: Treasuries, on absolute momentum vs cash (Antonacci) ──────
+bondMom = na(bondC[252]) or bondC[252] == 0 ? 0.0 : bondC / bondC[252] - 1.0
+cashMom = cashYield / 100.0
+bondOn  = bondMom > cashMom
+sleeveBd = nz(bondOn[1], false) ? bondRet : rfD
+
+// ── Sleeve 3: gold, on the Faber 200d trend rule ────────────────────────
+goldSMA = ta.sma(goldC, 200)
+goldOn  = not na(goldSMA) and goldC > goldSMA
+sleeveGd = nz(goldOn[1], false) ? goldRet : rfD
+
+// ── Risk parity: inverse-volatility weights, capped and renormalised ─────
+volEq = ta.stdev(sleeveEq, volLen) * math.sqrt(252)
+volBd = ta.stdev(sleeveBd, volLen) * math.sqrt(252)
+volGd = ta.stdev(sleeveGd, volLen) * math.sqrt(252)
+
+invEq = na(volEq) or volEq <= 0 ? 0.0 : 1.0 / volEq
+invBd = na(volBd) or volBd <= 0 ? 0.0 : 1.0 / volBd
+invGd = na(volGd) or volGd <= 0 ? 0.0 : 1.0 / volGd
+invSum = invEq + invBd + invGd
+
+rwEq = invSum > 0 ? invEq / invSum : 0.0
+rwBd = invSum > 0 ? invBd / invSum : 0.0
+rwGd = invSum > 0 ? invGd / invSum : 0.0
+
+// Cap any single sleeve, then push the excess onto the uncapped ones. One
+// pass is sufficient for three sleeves at a cap of 34% or more.
+cap = wCap / 100.0
+f_cap(w) => math.min(w, cap)
+cEq = f_cap(rwEq)
+cBd = f_cap(rwBd)
+cGd = f_cap(rwGd)
+excess = (rwEq - cEq) + (rwBd - cBd) + (rwGd - cGd)
+room   = (cEq < cap ? cEq : 0.0) + (cBd < cap ? cBd : 0.0) + (cGd < cap ? cGd : 0.0)
+wEq = cEq + (room > 0 and cEq < cap ? excess * cEq / room : 0.0)
+wBd = cBd + (room > 0 and cBd < cap ? excess * cBd / room : 0.0)
+wGd = cGd + (room > 0 and cGd < cap ? excess * cGd / room : 0.0)
+
+// Weights are applied with a one-day lag — decided at the prior close.
+lwEq = nz(wEq[1])
+lwBd = nz(wBd[1])
+lwGd = nz(wGd[1])
+
+// ── Portfolio volatility target ──────────────────────────────────────────
+bookRet = lwEq * sleeveEq + lwBd * sleeveBd + lwGd * sleeveGd
+bookVol = ta.stdev(bookRet, volLen) * math.sqrt(252)
+volMult = na(bookVol[1]) or bookVol[1] <= 0 ? 0.0 : math.min(1.0, tvT / bookVol[1])
+
+// ── Drawdown governor + stress cap ───────────────────────────────────────
+// The model book's own equity curve, rebuilt from chart history.
+var float W = 1.0
+hwm  = ta.highest(W, hwmLen)
+ddNow = na(hwm) or hwm <= 0 ? 0.0 : W / hwm - 1.0          // <= 0
+
+roomDD  = math.max(0.0, ddB + ddNow)                        // budget left
+cushion = ddB > 0 ? roomDD / ddB : 1.0
+ddMult  = math.max(minMult, math.min(1.0, cppiMult * cushion))
+
+bookStress = lwEq * gapEq / 100.0 + lwBd * gapBond / 100.0 + lwGd * gapGold / 100.0
+gapCap = bookStress > 0 ? roomDD / bookStress : 1.0
+
+exposure = math.max(0.0, math.min(1.0, math.min(volMult * ddMult, gapCap)))
+
+// Which limit is actually binding — useful for understanding the panel.
+bindWhich = exposure >= 0.999 ? "none (fully invested)" :
+     gapCap <= volMult * ddMult ? "stress gap cap" :
+     ddMult < 1.0 ? "drawdown governor" : "volatility target"
+
+// ── Target weights, band-rebalanced ──────────────────────────────────────
+tEq = exposure * lwEq
+tBd = exposure * lwBd
+tGd = exposure * lwGd
+
+var float hEq = 0.0
+var float hBd = 0.0
+var float hGd = 0.0
+drift = math.abs(tEq - hEq) + math.abs(tBd - hBd) + math.abs(tGd - hGd)
+doReb = drift * 100.0 >= band and not na(bookVol) and bar_index > 300
+if doReb
+    hEq := tEq
+    hBd := tBd
+    hGd := tGd
+
+// Advance the model book on the weights actually held.
+periodRet = hEq * sleeveEq + hBd * sleeveBd + hGd * sleeveGd +
+     (1.0 - hEq - hBd - hGd) * rfD
+if bar_index > 300
+    W := W * (1.0 + periodRet)
+
+cashW = math.max(0.0, 1.0 - hEq - hBd - hGd)
+
+// ── Panel ────────────────────────────────────────────────────────────────
+f_pct(x) => str.tostring(x * 100, "#.#") + "%"
+
+// Every lookback here is in DAYS and vol is annualised by sqrt(252), so the
+// panel is only meaningful on a daily chart.
+notDaily = timeframe.period != "D"
+var table warn = table.new(position.middle_center, 1, 1, border_width = 2)
+if barstate.islast and notDaily
+    table.cell(warn, 0, 0, "LRS-Sentinel needs a DAILY chart\n(current: " +
+         timeframe.period + ")", text_size = size.large, text_color = color.white,
+         bgcolor = color.new(color.red, 10))
+
+var table t = table.new(position.top_right, 3, 10, border_width = 1)
+if barstate.islast and not notDaily
+    table.cell(t, 0, 0, "LRS-SENTINEL", text_size = size.small, text_color = color.white,
+         bgcolor = color.new(color.blue, 20))
+    table.cell(t, 1, 0, "target", text_size = size.small, text_color = color.white,
+         bgcolor = color.new(color.blue, 20))
+    table.cell(t, 2, 0, "sleeve trend", text_size = size.small, text_color = color.white,
+         bgcolor = color.new(color.blue, 20))
+
+    table.cell(t, 0, 1, "Equity (" + eqSym + ")", text_size = size.small)
+    table.cell(t, 1, 1, f_pct(hEq), text_size = size.small,
+         text_color = hEq > 0 ? color.green : color.gray)
+    table.cell(t, 2, 1, defW > 0 ? "ON x" + str.tostring(defW, "#.##") : "OFF",
+         text_size = size.small, text_color = defW > 0 ? color.green : color.red)
+
+    table.cell(t, 0, 2, "Bonds (IEF)", text_size = size.small)
+    table.cell(t, 1, 2, f_pct(hBd), text_size = size.small,
+         text_color = hBd > 0 ? color.green : color.gray)
+    table.cell(t, 2, 2, bondOn ? "ON" : "OFF", text_size = size.small,
+         text_color = bondOn ? color.green : color.red)
+
+    table.cell(t, 0, 3, "Gold (GLD/UGL)", text_size = size.small)
+    table.cell(t, 1, 3, f_pct(hGd), text_size = size.small,
+         text_color = hGd > 0 ? color.green : color.gray)
+    table.cell(t, 2, 3, goldOn ? "ON" : "OFF", text_size = size.small,
+         text_color = goldOn ? color.green : color.red)
+
+    table.cell(t, 0, 4, "Cash (SGOV)", text_size = size.small)
+    table.cell(t, 1, 4, f_pct(cashW), text_size = size.small)
+    table.cell(t, 2, 4, "", text_size = size.small)
+
+    table.cell(t, 0, 5, "Risk exposure", text_size = size.small)
+    table.cell(t, 1, 5, f_pct(exposure), text_size = size.small)
+    table.cell(t, 2, 5, "binding: " + bindWhich, text_size = size.small)
+
+    table.cell(t, 0, 6, "Model drawdown", text_size = size.small)
+    table.cell(t, 1, 6, f_pct(ddNow), text_size = size.small,
+         text_color = ddNow < -0.05 ? color.red : color.gray)
+    table.cell(t, 2, 6, "budget " + str.tostring(ddBudget, "#.#") + "%", text_size = size.small)
+
+    table.cell(t, 0, 7, "Book vol (est)", text_size = size.small)
+    table.cell(t, 1, 7, na(bookVol) ? "-" : f_pct(bookVol), text_size = size.small)
+    table.cell(t, 2, 7, "target " + str.tostring(targetVol, "#.#") + "%", text_size = size.small)
+
+    table.cell(t, 0, 8, "Budget left", text_size = size.small)
+    table.cell(t, 1, 8, f_pct(roomDD), text_size = size.small)
+    table.cell(t, 2, 8, "", text_size = size.small)
+
+    table.cell(t, 0, 9, "MODEL dd, not yours", text_size = size.tiny,
+         text_color = color.gray)
+    table.cell(t, 1, 9, "", text_size = size.tiny)
+    table.cell(t, 2, 9, "backtest = run_lowdd.py", text_size = size.tiny,
+         text_color = color.gray)
+
+bgcolor(exposure < 0.25 ? color.new(color.red, 92) :
+     exposure < 0.60 ? color.new(color.orange, 94) : color.new(color.green, 95))
+
+// ── Alerts ───────────────────────────────────────────────────────────────
+alertcondition(doReb, "LRS-Sentinel: rebalance",
+     "Sentinel target weights moved beyond the band — trade to the panel's " +
+     "equity / bond / gold / cash weights at the next open.")
+alertcondition(exposure < 0.25 and exposure[1] >= 0.25, "LRS-Sentinel: de-risk",
+     "Sentinel exposure fell below 25% — the drawdown budget or stress cap is " +
+     "binding. Cut to the panel weights.")
+alertcondition(exposure >= 0.60 and exposure[1] < 0.60, "LRS-Sentinel: re-risk",
+     "Sentinel exposure recovered above 60% — the governor has released.")
