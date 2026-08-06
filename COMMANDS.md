@@ -65,7 +65,33 @@ top 10). The AI part takes a few minutes on CPU.
 
 ---
 
-## 3. Your wealth projection chart
+## 3. The low-drawdown engine (LRS-Sentinel)
+
+```bash
+python3 run_lowdd.py                 # Nasdaq Composite, 10% drawdown budget
+python3 run_lowdd.py "S&P 500" 0.08  # different index / tighter budget
+```
+**What it does:** the opposite trade-off from `run_research.py`. Instead of
+maximising growth and accepting a -50%+ drawdown, it caps max drawdown at a
+budget you set and finds the most CAGR that fits inside it. Builds three
+trend sleeves (3x equity on the Defense signal, UST10 momentum, gold trend),
+weights them inverse-vol, then sizes the whole book with a volatility target,
+a CPPI drawdown governor and an overnight-gap stress cap. It sweeps the risk
+settings and reports the frontier.
+
+**Outputs:** `results_lowdd_sweep.csv` (every setting scored), a best-config
+table with the 2016+ out-of-sample row, a decade breakdown, and
+`chart_sentinel.png`.
+
+**How to read it:** the `passes` column says whether that setting held inside
+the budget; the best config is the highest-CAGR row among those. Then read
+the **cash caveat** the run prints at the end — a portfolio this de-risked is
+structurally mostly T-bills, so a lot of the full-history CAGR is just 1980s
+interest rates. Trust the out-of-sample row more.
+
+---
+
+## 4. Your wealth projection chart
 
 ```bash
 python3 make_projection.py
@@ -77,7 +103,7 @@ $500/1000/1500/2000-per-month contributions, with milestone years (₹1cr →
 
 ---
 
-## 4. Best & worst years
+## 5. Best & worst years
 
 ```bash
 python3 best_worst_years.py
@@ -88,7 +114,7 @@ hold beside each and the `edge %` column showing who won that year. Read the
 edge column in the worst-years table to see what the crash protection is
 worth — and in the best-years table to see what it costs.
 
-## 5. Refreshing market data
+## 6. Refreshing market data
 
 Prices are cached forever in `data_cache/`. To pull fresh data, delete the
 price caches (NOT the source files) and rerun:
@@ -118,7 +144,7 @@ curl -s -A "Mozilla/5.0" "https://archives.nseindia.com/content/indices/ind_nift
 
 ---
 
-## 6. TradingView setup (not a command — a checklist)
+## 7. TradingView setup (not a command — a checklist)
 
 **US (the 70% sleeve):**
 1. Open a **daily** chart of `NASDAQ:TQQQ`.
@@ -143,7 +169,7 @@ stop looking.
 
 ---
 
-## 7. Project map
+## 8. Project map
 
 ```
 PLAYBOOK.md            what/when/how to invest (read this first)
@@ -151,9 +177,11 @@ README.md              the research evidence and every disclosed assumption
 COMMANDS.md            this file
 run_research.py        US engine        -> results_*.csv, chart_flagship.png
 run_nifty500.py        India engine     -> results_<universe>.csv, report
+run_lowdd.py           low-DD engine    -> results_lowdd_sweep.csv, chart_sentinel.png
 make_projection.py     wealth chart     -> portfolio_projection.png
 quantlab/              the engine library (data, leverage, bonds, gold,
-                       strategies, backtest, metrics, report, india, ollama)
+                       strategies, backtest, metrics, report, india, ollama,
+                       sentinel)
 tradingview/           LRS_VT.pine (US), LRS_India.pine (NSE)
 data_cache/            cached prices + source data (gold, NSE lists)
 ```
