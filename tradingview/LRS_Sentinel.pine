@@ -19,9 +19,14 @@
 //      symbol is only a canvas — every input below is an explicit symbol, so
 //      any liquid daily chart gives identical output.
 //   2. Paste into the Pine Editor -> Add to chart.
-//   3. Read the table. It gives you a target % for TQQQ, IEF, gold and cash.
-//      Trade to those weights at the next open when an alert fires.
-//   4. Set the two alerts ("rebalance" and "de-risk").
+//   3. Read the top-right table. It gives you a target % for TQQQ, IEF, gold
+//      and cash. Trade to those weights at the next open when an alert fires.
+//   4. Read the bottom-left KEY STATS panel for P/L, CAGR, max drawdown and
+//      Sharpe. Because this is an indicator there is no Strategy Tester tab,
+//      so those numbers are computed here from the model book — net of the
+//      commission charged on each rebalance, but a portfolio simulation
+//      rather than a broker simulation (no fills, spreads or slippage).
+//   5. Set the alerts ("rebalance", "de-risk", "re-risk").
 //
 // THE FOUR MECHANISMS (see quantlab/sentinel.py for the full rationale)
 //   1. Risk parity over three trend sleeves, each parking in T-bills when its
@@ -69,6 +74,11 @@ cashYield = input.float(4.3,  "Cash / T-bill yield (% annual)",         minval =
      step = 0.1, group = "Risk budget")
 
 // ── Sizing detail ────────────────────────────────────────────────────────
+initCap   = input.float(10000, "Initial capital (for the P/L readout)", minval = 1.0,
+     group = "Performance")
+costPct   = input.float(0.10, "Commission per rebalance (% of traded notional)",
+     minval = 0.0, step = 0.01, group = "Performance")
+
 volLen    = input.int(60,  "Vol lookback for sizing (days)", minval = 20, group = "Sizing")
 wCap      = input.float(60.0, "Max weight per sleeve (%)",   minval = 34.0, maxval = 100.0,
      group = "Sizing")
@@ -213,6 +223,9 @@ var float hBd = 0.0
 var float hGd = 0.0
 drift = math.abs(tEq - hEq) + math.abs(tBd - hBd) + math.abs(tGd - hGd)
 doReb = drift * 100.0 >= band and not na(bookVol) and bar_index > 300
+// Notional actually traded this bar — charged below, so the P/L readout is
+// net of costs rather than flattered by a free daily rebalance.
+tradedNotional = doReb ? drift : 0.0
 if doReb
     hEq := tEq
     hBd := tBd
@@ -220,9 +233,34 @@ if doReb
 
 // Advance the model book on the weights actually held.
 periodRet = hEq * sleeveEq + hBd * sleeveBd + hGd * sleeveGd +
-     (1.0 - hEq - hBd - hGd) * rfD
+     (1.0 - hEq - hBd - hGd) * rfD - tradedNotional * costPct / 100.0
+
+// ── Performance accumulators (the strategy-tester numbers, computed here) ─
+var float peakW  = 1.0
+var float maxDD  = 0.0
+var int   nBars  = 0
+var float sumR   = 0.0
+var float sumR2  = 0.0
+var int   nRebal = 0
+var int   tStart = na
+
 if bar_index > 300
     W := W * (1.0 + periodRet)
+    peakW := math.max(peakW, W)
+    maxDD := math.min(maxDD, W / peakW - 1.0)
+    nBars += 1
+    sumR  += periodRet
+    sumR2 += periodRet * periodRet
+    nRebal += doReb ? 1 : 0
+    tStart := na(tStart) ? time : tStart
+
+years   = nBars / 252.0
+totRet  = W - 1.0
+cagrVal = years > 0.1 and W > 0 ? math.pow(W, 1.0 / years) - 1.0 : na
+meanR   = nBars > 1 ? sumR / nBars : na
+sdR     = nBars > 1 ? math.sqrt(math.max(0.0, sumR2 / nBars - meanR * meanR)) : na
+annVol  = na(sdR) ? na : sdR * math.sqrt(252)
+sharpeV = na(sdR) or sdR <= 0 ? na : (meanR - rfD) / sdR * math.sqrt(252)
 
 cashW = math.max(0.0, 1.0 - hEq - hBd - hGd)
 
@@ -291,6 +329,49 @@ if barstate.islast and not notDaily
     table.cell(t, 1, 9, "", text_size = size.tiny)
     table.cell(t, 2, 9, "backtest = run_lowdd.py", text_size = size.tiny,
          text_color = color.gray)
+
+// ── Performance panel — the strategy-tester "Key stats" equivalent ───────
+// Sentinel is an indicator, so TradingView cannot produce a Strategy Tester
+// report for it. These are the same numbers, computed from the model book:
+// net of the commission charged above, but NOT a broker simulation.
+f_money(x) => (x < 0 ? "-" : "+") + str.tostring(math.abs(x), "#,###.00") + " USD"
+
+var table p = table.new(position.bottom_left, 2, 8, border_width = 1)
+if barstate.islast and not notDaily
+    table.cell(p, 0, 0, "KEY STATS (model book)", text_size = size.small,
+         text_color = color.white, bgcolor = color.new(color.gray, 20))
+    table.cell(p, 1, 0, "net of " + str.tostring(costPct, "#.##") + "% costs",
+         text_size = size.small, text_color = color.white,
+         bgcolor = color.new(color.gray, 20))
+
+    table.cell(p, 0, 1, "Total P/L", text_size = size.small)
+    table.cell(p, 1, 1, f_money(initCap * totRet) + "  (" + f_pct(totRet) + ")",
+         text_size = size.small, text_color = totRet >= 0 ? color.green : color.red)
+
+    table.cell(p, 0, 2, "Final equity", text_size = size.small)
+    table.cell(p, 1, 2, str.tostring(initCap * W, "#,###.00") + " USD",
+         text_size = size.small)
+
+    table.cell(p, 0, 3, "CAGR", text_size = size.small)
+    table.cell(p, 1, 3, na(cagrVal) ? "-" : f_pct(cagrVal), text_size = size.small,
+         text_color = color.new(color.aqua, 0))
+
+    table.cell(p, 0, 4, "Max drawdown", text_size = size.small)
+    table.cell(p, 1, 4, f_pct(maxDD) + "  (budget " + str.tostring(ddBudget, "#.#") + "%)",
+         text_size = size.small,
+         text_color = maxDD < -ddB ? color.red : color.green)
+
+    table.cell(p, 0, 5, "Sharpe / ann vol", text_size = size.small)
+    table.cell(p, 1, 5, (na(sharpeV) ? "-" : str.tostring(sharpeV, "#.##")) + "  /  " +
+         (na(annVol) ? "-" : f_pct(annVol)), text_size = size.small)
+
+    table.cell(p, 0, 6, "Period", text_size = size.small)
+    table.cell(p, 1, 6, str.tostring(years, "#.#") + " yrs from " +
+         (na(tStart) ? "-" : str.format_time(tStart, "yyyy-MM-dd")), text_size = size.small)
+
+    table.cell(p, 0, 7, "Rebalances", text_size = size.small)
+    table.cell(p, 1, 7, str.tostring(nRebal) + "  (" +
+         str.tostring(years > 0 ? nRebal / years : 0, "#.#") + "/yr)", text_size = size.small)
 
 bgcolor(exposure < 0.25 ? color.new(color.red, 92) :
      exposure < 0.60 ? color.new(color.orange, 94) : color.new(color.green, 95))

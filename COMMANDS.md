@@ -171,6 +171,16 @@ you which of the three limits is holding exposure down right now. Note the
 model drawdown it shows is the *model's*, rebuilt from chart history — not
 your account's.
 
+Because it is an indicator there is no Strategy Tester tab, so the
+**bottom-left KEY STATS panel** reports the same numbers itself: total P/L in
+USD and %, **CAGR**, max drawdown against your budget, Sharpe, annualised vol,
+the period covered and rebalances per year. Set "Initial capital" to whatever
+you want the P/L quoted on. These are net of the commission charged on each
+rebalance (default 0.10% of traded notional), but they are a portfolio
+simulation, not a broker simulation — no fills, spreads or slippage — and the
+window starts at the youngest input symbol (TQQQ from 2010). For a
+55-year backtest use `run_lowdd.py`.
+
 **India:** daily chart of the NSE stock or ETF → paste
 `tradingview/LRS_India.pine`. For ETFs enable "signal on a separate index
 symbol" and pick the underlying index. Set both alerts.

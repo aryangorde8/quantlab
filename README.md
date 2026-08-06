@@ -201,8 +201,12 @@ a Pine strategy can only hold one symbol, so any strategy-tester number would
 describe a different portfolio. Run it on a **daily** chart (NASDAQ:TQQQ is the
 natural host, but every symbol is an explicit input, so the host is only a
 canvas) and it prints a target weight for each sleeve plus cash, which limit is
-currently binding, and the model book's drawdown against your budget. The
-backtest stays `run_lowdd.py`.
+currently binding, and the model book's drawdown against your budget. Since an
+indicator gets no Strategy Tester tab, it also computes its own KEY STATS panel
+— P/L, CAGR, max drawdown, Sharpe — from the model book, net of rebalance
+commission. That panel is a portfolio simulation rather than a broker one, and
+only reaches back to the youngest input symbol; the 55-year backtest stays
+`run_lowdd.py`.
 
 `tradingview/LRS_India.pine` is the 1x Indian adaptation (no leveraged equity
 ETFs exist in India) for NSE stocks, index ETFs and indices: two-speed trend
