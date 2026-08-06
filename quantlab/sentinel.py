@@ -79,6 +79,15 @@ DEFAULT_STRESS_GAP = {
 }
 GENERIC_STRESS_GAP = 0.25
 
+# Sigma multiple used by the regime-aware stress cap. Assuming a 1987-scale
+# gap on every calm day is a 1-in-14,000-day event priced daily, which pins
+# exposure near its floor forever and costs most of the available return. The
+# cap instead scales with each sleeve's own trailing volatility and is
+# CEILINGED by the historical worst above, so a quiet regime relaxes it while
+# a violent one reverts to the 1987 assumption.
+STRESS_SIGMA = 8.0
+STRESS_FLOOR = 0.03
+
 
 def inverse_vol_weights(
     sleeves: pd.DataFrame, lookback: int = 60, cap: float = 0.60
@@ -117,6 +126,7 @@ def build(
     min_mult: float = 0.15,
     max_exposure: float = 1.0,
     stress_gap: dict[str, float] | None = None,
+    stress_sigma: float | None = STRESS_SIGMA,
     vol_lookback: int = 60,
     weight_lookback: int = 60,
     weight_cap: float = 0.60,
@@ -151,8 +161,20 @@ def build(
     # default is the 1987-10-19 experience (index -20.5%, so ~-61% on a 3x
     # fund); unnamed sleeves get a conservative generic gap.
     gaps = dict(DEFAULT_STRESS_GAP if stress_gap is None else stress_gap)
-    stress = np.array([gaps.get(c, GENERIC_STRESS_GAP) for c in sl.columns])
-    book_stress = w_arr @ stress  # stress loss of the book at unit exposure
+    worst = np.array([gaps.get(c, GENERIC_STRESS_GAP) for c in sl.columns])
+
+    if stress_sigma is None:
+        stress_arr = np.tile(worst, (n_rows := len(idx), 1))
+    else:
+        # Regime-aware: an n-sigma move on each sleeve's own trailing daily
+        # vol, floored so a calm patch never implies zero risk and ceilinged
+        # by the historical worst so a violent one never implies less.
+        dvol = sl.rolling(vol_lookback).std().shift(1)
+        stress_arr = (stress_sigma * dvol).clip(lower=STRESS_FLOOR, axis=None)
+        stress_arr = stress_arr.clip(upper=pd.Series(worst, index=sl.columns), axis=1)
+        stress_arr = stress_arr.fillna(pd.Series(worst, index=sl.columns)).to_numpy()
+
+    book_stress = (w_arr * stress_arr).sum(axis=1)  # book stress at unit exposure
 
     wealth = np.empty(n)
     exposure = np.empty(n)
