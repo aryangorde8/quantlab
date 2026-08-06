@@ -67,6 +67,50 @@ there); the config was assembled studying the very crises it defends against,
 so out-of-sample humility applies — though its OOS decade (2016+) delivered
 31.8% at -47.2%.
 
+## The other direction: LRS-Sentinel (a hard drawdown budget)
+
+Every config above maximises growth and pays for it with -50% to -67%
+drawdowns. `run_lowdd.py` inverts the objective: **cap max drawdown (default
+budget: under 10%) and take the most CAGR that cap allows.**
+
+Signal-level tightening cannot get there, and the reason is arithmetic rather
+than opinion. A 3x fund fell ~61% on 1987-10-19 alone; entering that day at
+zero drawdown, a 10% budget is already spent at a 16% weight in the fund — and
+no daily signal reacts to an overnight gap. Only *sizing* can buy a budget
+that tight, so LRS-Sentinel changes the construction on four axes at once:
+
+| Mechanism | What it does | Source |
+|---|---|---|
+| Risk parity over three trend sleeves | Equity (3x, Defense signal), UST10 momentum and gold trend, each parking in T-bills when its own trend is off, weighted inverse-vol | Faber (2007) GTAA; Asness, Frazzini & Pedersen (2012) |
+| Portfolio volatility target | Scale the whole book to a low target vol; drawdown scales roughly linearly with vol, so this does most of the work | Moreira & Muir (2017) |
+| Drawdown governor (CPPI) | Cut exposure in proportion to the cushion left above a floor — the hard constraint | Black & Perold (1992); Grossman & Zhou (1993) |
+| Stress (gap) cap | Cap exposure so a worst-case *overnight* move still fits the remaining budget — the governor reacts to realised drawdown and structurally cannot price a gap | standard stress limit |
+
+The sleeves are deliberately kept pure: the equity sleeve parks in T-bills,
+not gold, because the gold sleeve already holds that exposure — letting both
+hold it would double-count gold and corrupt the risk-parity weights.
+
+**The cash-lock fix.** The earlier finding above — that equity-curve governors
+"halve DD but collapse CAGR by staying de-levered through recoveries" — is
+cash-lock: against an all-time high-water mark the floor never moves, so once
+pinned you miss the rebound. Sentinel measures drawdown against a *rolling*
+high-water mark (default 252 days) so an old peak ages out and the floor
+decays, and enforces a minimum exposure so the book never fully locks to cash.
+
+**No performance numbers are quoted here on purpose.** They were not measured —
+the environment this was written in could not reach the price data. The code is
+validated for mechanics (no look-ahead, the budget binds monotonically, vol
+target lands, turnover stays ~1-3 round-trips/year), not for edge. Run
+`python3 run_lowdd.py` to produce the real figures; it sweeps the risk settings
+and prints the best CAGR that held inside the budget.
+
+**Expect the honest answer to be modest, and read the cash caveat the run
+prints.** A portfolio held to a sub-10% drawdown is structurally mostly
+T-bills. T-bills paid double digits in the 1980s, so full-history CAGR for
+this config is flattered by an interest-rate regime that no longer exists —
+the run reports how much of the return was just cash, and the 2016+
+out-of-sample row deserves far more weight than the full-history row.
+
 ## The strategy (every piece is published research)
 
 | Component | Rule | Source |
@@ -150,6 +194,20 @@ vol target, fills orders next bar (same 1-day lag as the backtest), and ships
 alerts for risk-on / risk-off / rebalance. When risk-off it goes flat — park
 real proceeds in T-bills/Treasuries yourself (SGOV/IEF).
 
+`tradingview/LRS_Sentinel.pine` is the live panel for the drawdown-budgeted
+book. Unlike the others it is an **indicator, not a `strategy()`** — Sentinel
+holds three risky sleeves at once (TQQQ + IEF + gold) at shifting weights, and
+a Pine strategy can only hold one symbol, so any strategy-tester number would
+describe a different portfolio. Run it on a **daily** chart (NASDAQ:TQQQ is the
+natural host, but every symbol is an explicit input, so the host is only a
+canvas) and it prints a target weight for each sleeve plus cash, which limit is
+currently binding, and the model book's drawdown against your budget. Since an
+indicator gets no Strategy Tester tab, it also computes its own KEY STATS panel
+— P/L, CAGR, max drawdown, Sharpe — from the model book, net of rebalance
+commission. That panel is a portfolio simulation rather than a broker one, and
+only reaches back to the youngest input symbol; the 55-year backtest stays
+`run_lowdd.py`.
+
 `tradingview/LRS_India.pine` is the 1x Indian adaptation (no leveraged equity
 ETFs exist in India) for NSE stocks, index ETFs and indices: two-speed trend
 ladder validated on the Nifty Midcap 150 backtest (ladder median Sharpe 0.49
@@ -169,6 +227,8 @@ quantlab/
   report.py          # equity-curve + drawdown chart
   india.py           # Nifty 500 universe + bulk price download
   ollama_analyst.py  # local-LLM research commentary (Ollama)
+  sentinel.py        # drawdown-budgeted book (risk parity + vol target + CPPI + gap cap)
 run_research.py      # the US flagship research run
 run_nifty500.py      # the Nifty 500 cross-sectional run
+run_lowdd.py         # the low-drawdown (LRS-Sentinel) frontier run
 ```
