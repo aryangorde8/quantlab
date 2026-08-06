@@ -119,6 +119,18 @@ eqRet   = f_ret(eqC)
 bondRet = f_ret(bondC)
 goldRet = f_ret(goldC)
 
+// Warmup gate. The book only runs once ALL THREE sleeves have real data.
+// Without this, hosting the script on a chart older than the youngest input
+// (SPY back to 1993 vs TQQQ from 2010) would silently score years in which
+// the equity sleeve contributed nothing — the P/L readout would understate
+// risk while looking perfectly reasonable.
+allData = not na(eqC) and not na(bondC) and not na(goldC) and
+     not na(eqC[1]) and not na(bondC[1]) and not na(goldC[1])
+var int readyBars = 0
+if allData
+    readyBars += 1
+warmed = readyBars > 300
+
 // ── Sleeve 1: equity, on the LRS-Defense ladder ─────────────────────────
 smaSlow = ta.sma(idxC, slowLen)
 smaFast = ta.sma(idxC, fastLen)
@@ -222,7 +234,7 @@ var float hEq = 0.0
 var float hBd = 0.0
 var float hGd = 0.0
 drift = math.abs(tEq - hEq) + math.abs(tBd - hBd) + math.abs(tGd - hGd)
-doReb = drift * 100.0 >= band and not na(bookVol) and bar_index > 300
+doReb = drift * 100.0 >= band and not na(bookVol) and readyBars > 300
 // Notional actually traded this bar — charged below, so the P/L readout is
 // net of costs rather than flattered by a free daily rebalance.
 tradedNotional = doReb ? drift : 0.0
@@ -236,6 +248,11 @@ periodRet = hEq * sleeveEq + hBd * sleeveBd + hGd * sleeveGd +
      (1.0 - hEq - hBd - hGd) * rfD - tradedNotional * costPct / 100.0
 
 // ── Performance accumulators (the strategy-tester numbers, computed here) ─
+// The book only starts once ALL THREE sleeves have real data. Without this
+// gate, hosting the script on a chart older than the youngest input (SPY back
+// to 1993 vs TQQQ from 2010) would silently score years in which the equity
+// sleeve contributed nothing, and the P/L readout would understate risk while
+// looking perfectly reasonable.
 var float peakW  = 1.0
 var float maxDD  = 0.0
 var int   nBars  = 0
@@ -244,7 +261,7 @@ var float sumR2  = 0.0
 var int   nRebal = 0
 var int   tStart = na
 
-if bar_index > 300
+if warmed
     W := W * (1.0 + periodRet)
     peakW := math.max(peakW, W)
     maxDD := math.min(maxDD, W / peakW - 1.0)
